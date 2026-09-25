@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lean-library-graph"
+version = "0.2.0"
+description = "Local Lean library graphs based on Archon's Proof Graph"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = []
+
+[project.scripts]
+lean-library-graph = "lean_graph.cli:main"
+
+[tool.setuptools.package-data]
+lean_graph = ["web/*"]
+
+[tool.setuptools.packages.find]
+include = ["lean_graph*"]

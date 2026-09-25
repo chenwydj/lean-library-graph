@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lean Library Graph</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header id="library-header">
+    <div class="brand"><span class="brand-mark">L</span><div><h1>Lean Library Graph</h1><p id="project">Loading library...</p></div></div>
+    <div class="header-actions"><span class="source-badge">SOURCE ANALYSIS</span><button id="refresh">Refresh sources</button><button id="export-json">Export JSON</button></div>
+  </header>
+  <div id="stats" class="stats" aria-live="polite"></div>
+  <div id="error" role="alert" hidden></div>
+  <div class="toolbar" id="filter-controls">
+    <div class="tabs" role="group" aria-label="Graph view"><button id="declarations" aria-pressed="true">Declarations</button><button id="modules" aria-pressed="false">File (Module)</button></div>
+    <label class="search"><span>Search</span><input id="search" type="search" placeholder="Problem1 or Problem1*" aria-describedby="search-error" aria-invalid="false" autocomplete="off" spellcheck="false"></label>
+    <label>Search mode<select id="search-mode"><option value="wildcard" selected>Wildcard</option><option value="regex">Regex</option></select></label>
+    <label>File<select id="file"><option value="">All files</option></select></label>
+    <label id="kind-label">Kind<select id="kind"><option value="">All kinds</option></select></label>
+    <label id="status-label">Status<select id="status"><option value="">All declarations</option><option value="sorry">Contains sorry</option><option value="clear">No sorry found</option><option value="axiom">Axioms</option></select></label>
+    <label class="check"><input type="checkbox" id="external">External imports</label>
+    <label hidden>View layout<select id="view-layout"><option value="graph">Graph</option><option value="tree" selected>Expandable tree</option></select></label>
+    <label id="module-layout-label" hidden>Layout<select id="module-layout"><option value="folders">Folders</option><option value="dependencies">Dependency layers</option></select></label>
+  </div>
+  <div id="search-error" class="search-error" role="status" aria-live="polite" hidden></div>
+  <div class="analysis-toolbar" id="analysis-controls">
+    <label hidden>Importance<select id="importance"></select></label>
+    <label hidden>Minimum score<input id="min-score" type="number" min="0" step="any" value="0" title="Show nodes whose selected importance score is at least this value; pins remain visible"></label>
+    <label hidden>Max nodes<input id="node-limit" type="number" min="0" step="1" value="0" title="0 renders all matching nodes"></label>
+    <span class="control-hint" hidden>0 = all; pins extra</span>
+    <button id="pin-all" disabled title="Pin all nodes currently rendered in this graph view">Pin all</button>
+    <button id="unpin-all" disabled title="Unpin only nodes currently rendered in this graph view, including pins kept visible outside filters">Unpin all</button>
+    <button id="exclude-all" disabled title="Exclude all currently visible nodes in this view, also removing their pins">Exclude all</button>
+    <button id="unexclude-all" disabled title="Clear all exclusions in this view; restored nodes follow the current filters and node limit">Un-exclude all</button>
+    <label class="check"><input id="heat" type="checkbox">Color by changes</label>
+    <label>Recent commits<input id="history-window" type="number" min="1" max="200" step="1" value="20"></label>
+    <span id="history-status" role="status"></span>
+  </div>
+  <div id="metric-description" class="metric-description"></div>
+  <main>
+    <section class="canvas-shell" aria-label="Dependency graph">
+      <div class="canvas-top"><span id="visible-count">Building graph...</span><div class="canvas-controls"><label>Edges<select id="edge-mode"><option value="auto">Automatic</option><option value="selected">Selected node</option><option value="all">All visible</option><option value="none">Hidden</option></select></label><div id="tree-controls" hidden><button id="tree-expand-all">Expand all children</button><button id="tree-collapse-all">Collapse all</button></div><div class="font-controls" role="group" aria-label="Diagram text size"><button id="font-smaller" aria-label="Smaller diagram text" disabled>A−</button><button id="font-larger" aria-label="Larger diagram text" disabled>A+</button></div><div class="node-navigation" role="group" aria-label="Node history"><button id="node-back" aria-label="Back to previous node" title="No previous node" disabled>←</button><button id="node-forward" aria-label="Forward to next node" title="No next node" disabled>→</button></div><div class="toolbar-end"><button id="toggle-menus" aria-expanded="true" aria-controls="library-header stats filter-controls analysis-controls metric-description error search-error" aria-label="Hide controls above diagram" title="Hide controls above diagram"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m3 10 5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button id="expand-graph" aria-expanded="false" aria-controls="graph" aria-label="Expand diagram" title="Expand the diagram to fill this page"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path transform="rotate(-45 12 12)" d="M3 12H21 M7 8L3 12L7 16 M17 8L21 12L17 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div></div></div>
+      <svg id="graph" role="group" aria-label="Interactive Lean dependency graph" tabindex="0"></svg>
+      <div id="empty" hidden>Search for a node or choose a file to begin.</div>
+      <div class="canvas-bottom"><div class="legend" id="legend"><span class="dot green"></span>No sorry found<span class="dot red"></span>Contains sorry<span class="dot purple"></span>Axiom</div><div class="zoom"><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="export-svg">Save SVG</button><button id="export-pdf" disabled title="Download the full filtered graph as a PDF, including current colors and displayed edges">Save PDF</button><button id="copy-image" disabled title="Copy the full filtered graph as a PNG image, including folder boxes, colors, and displayed edges">Copy Image</button><span id="copy-status" role="status" aria-live="polite"></span></div></div>
+    </section>
+    <div id="inspector-resizer" role="separator" tabindex="0" aria-label="Resize Inspector" aria-orientation="vertical" aria-controls="inspector-pane" aria-valuemin="260" aria-valuemax="900" aria-valuenow="350" title="Drag left or right to resize Inspector. Arrow keys also work."><span aria-hidden="true">↔</span></div>
+    <aside id="inspector-pane">
+      <div class="inspector-title"><h2>Inspector</h2><button id="clear-selection" aria-label="Clear selection">×</button></div>
+      <div id="inspector"><div class="intro"><div class="mini-graph">◻ ↗ ◻</div><h3>Explore the library</h3><p>Select a declaration to read its source and follow references.</p><p>Search or choose a file to start. Use Parents to reveal nodes that use this node, and Children to reveal its dependencies.</p><p>Scroll to zoom. Drag the canvas to pan. Each node has separate parent and child expansion controls.</p></div></div>
+    </aside>
+  </main>
+  <footer><span>Based on Archon's Proof Graph</span><span id="analysis-note">Arrows point from a user to its dependency. References are inferred; no-sorry is not proof verification.</span></footer>
+</body>
+</html>

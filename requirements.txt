@@ -1,0 +1,4 @@
+# Requires Python >= 3.10.
+# No third-party Python runtime dependencies; only the standard library is used.
+# Optional package installation: python3 -m pip install .
+# Build dependencies are declared separately in pyproject.toml.
