@@ -745,7 +745,7 @@ function showDetail(){
   if(!exclude.checked&&state.hidden[state.mode].has(d.id))panel.append(element('p',{class:'muted'},'Temporarily hidden. Search again, expand a connected node, or choose Show node to restore it.'));
   if(exclude.checked)panel.append(element('p',{class:'muted'},'Excluded from this graph view. Uncheck Exclude node to show it again. Search, expansion, and Show node do not override exclusion.'));
   if(d.file && !d.external) {
-    const href='/source?file='+encodeURIComponent(d.file)+(d.line?'#L'+d.line:'');
+    const href='/open-source?file='+encodeURIComponent(d.file)+(d.line?`&line=${d.line}&end=${d.endLine||d.line}`:'');
     panel.append(element('a',{class:'source-file-button',href,target:'_blank',rel:'noopener noreferrer',
       title:d.line?`Open complete Lean file at line ${d.line} in a new tab`:'Open complete Lean file in a new tab'},'Open Lean file ↗'));
   }

@@ -171,6 +171,88 @@ theorem example : True := by
         self.assertIn(('example', 'A.Setup.finish'), edges)
         self.assertIn(('example', 'B.Setup.finish'), edges)
 
+    def test_receiver_chain_keeps_known_member_and_type_dependencies(self):
+        self.write('Base.lean', '''namespace Demo
+structure Continuity where
+  n : Nat
+theorem Continuity.continuousOn (h : Continuity) : True := by trivial
+theorem Continuity.tendsto (h : Continuity) : True := by trivial
+structure IsSetup where
+  n : Nat
+namespace IsSetup
+variable (S : IsSetup)
+include S
+def continuous_prim : Continuity := ⟨S.n⟩
+end IsSetup
+end Demo
+''')
+        self.write('Use.lean', '''import Base
+namespace Demo
+variable (S : IsSetup)
+include S
+theorem exists_solution : True := by
+  have a := S.continuous_prim.continuousOn
+  have b := S.continuous_prim.tendsto
+  exact a
+end Demo
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        self.assertIn(('Demo.exists_solution', 'Demo.IsSetup'), edges)
+        self.assertIn(('Demo.exists_solution', 'Demo.IsSetup.continuous_prim'), edges)
+        # Do not claim that later methods were resolved without their return type.
+        self.assertNotIn(('Demo.exists_solution', 'Demo.Continuity.continuousOn'), edges)
+        self.assertNotIn(('Demo.exists_solution', 'Demo.Continuity.tendsto'), edges)
+        node = next(d for d in graph['declarations'] if d['fullName'] == 'Demo.exists_solution')
+        target = next(d for d in graph['declarations'] if d['fullName'] == 'Demo.IsSetup.continuous_prim')
+        matching = [e for e in graph['edges'] if e['from'] == node['id'] and e['to'] == target['id']]
+        self.assertEqual(len(matching), 1)
+        evidence = matching[0]['evidence']
+        self.assertEqual({(e['reference'], e['line'], e['column']) for e in evidence},
+                         {('S.continuous_prim.continuousOn', 6, 13),
+                          ('S.continuous_prim.tendsto', 7, 13)})
+        self.assertTrue(all(e['receiverType'] == 'Demo.IsSetup' for e in evidence))
+        self.assertTrue(all(e['resolvedPrefix'] == 'S.continuous_prim' for e in evidence))
+        self.assertEqual({r['unresolvedSuffix'] for r in node['unresolvedReferences']},
+                         {'continuousOn', 'tendsto'})
+        json.dumps(graph)
+
+    def test_receiver_chain_does_not_treat_tail_as_original_type_member(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem A.Setup.finish.tail (S : A.Setup) : True := by trivial
+theorem use (S : A.Setup) : True := by
+  have a := S.finish.tail.more
+  exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        self.assertIn(('use', 'A.Setup.finish'), edges)
+        self.assertNotIn(('use', 'A.Setup.finish.tail'), edges)
+        node = next(d for d in graph['declarations'] if d['name'] == 'use')
+        self.assertEqual(node['unresolvedReferences'][0]['unresolvedSuffix'], 'tail.more')
+
+    def test_receiver_chain_obeys_visibility_and_unknown_local_shadowing(self):
+        self.setup_types()
+        self.write('Hidden.lean', 'import Types\ntheorem A.Setup.hidden (S : A.Setup) : True := by trivial\n')
+        self.write('Use.lean', '''import Types
+theorem S.finish.tail : True := by trivial
+theorem unknown (S : A.Setup) : True := by
+  have S := arbitrary
+  exact S.finish.tail
+theorem unimported (S : A.Setup) : True := by exact S.hidden.tail
+theorem later (S : A.Setup) : True := by exact S.future.tail
+theorem A.Setup.future (S : A.Setup) : True := by trivial
+open A B
+theorem ambiguous (S : Setup) : True := by exact S.finish.tail
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        for user in ('unknown', 'unimported', 'later', 'ambiguous'):
+            self.assertFalse(any(a == user and b not in {'A.Setup', 'B.Setup'} for a, b in edges))
+            node = next(d for d in graph['declarations'] if d['name'] == user)
+            self.assertNotIn('resolvedPrefix', node['unresolvedReferences'][0])
+
     def test_nested_shadowing_ends_at_dedent_and_initializer_uses_outer_binding(self):
         self.setup_types()
         self.write('Use.lean', '''import Types

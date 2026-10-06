@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 from lean_graph.cli import make_server
 from lean_graph.scanner import ScanConfig
@@ -90,6 +91,33 @@ class ServerTests(unittest.TestCase):
             path.unlink(missing_ok=True)
             self.get('/api/graph?refresh=1')
         self.assertEqual(self.get(route)[0],404)
+
+    def test_open_source_redirects_and_validates_file_and_lines(self):
+        def location(route):
+            conn = HTTPConnection('127.0.0.1', self.server.server_port)
+            conn.request('GET', route)
+            response = conn.getresponse()
+            result = response.status, response.getheader('Location'), response.getheader('Cache-Control')
+            response.read()
+            conn.close()
+            return result
+
+        self.assertEqual(location('/open-source?file=A.lean&line=1'),
+                         (302, '/source?file=A.lean#L1', 'no-store'))
+        self.assertEqual(location('/open-source?file=A.lean'),
+                         (302, '/source?file=A.lean', 'no-store'))
+        with patch('lean_graph.source_links.SourceLinks.destination',
+                   return_value='https://github.com/owner/repo/blob/main/A.lean#L1') as resolve:
+            status, target, cache = location('/open-source?file=A.lean&line=1&end=1')
+            self.assertEqual(status, 302)
+            self.assertEqual(target, 'https://github.com/owner/repo/blob/main/A.lean#L1')
+            resolve.assert_called_once_with('A.lean', 1, 1)
+            for query in ['file=../A.lean', 'file=/tmp/A.lean', 'file=missing.lean']:
+                self.assertEqual(location('/open-source?' + query)[0], 404)
+            for query in ['line=abc', 'line=-1', 'line=2', 'line=1&end=0', 'line=0&end=1']:
+                self.assertEqual(location('/open-source?file=A.lean&' + query)[0], 400)
+            self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(self.get('/open-source?file=A.lean', {'Origin': 'https://foreign.example'})[0], 403)
 
 
 if __name__ == '__main__':

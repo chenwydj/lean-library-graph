@@ -14,6 +14,7 @@ import webbrowser
 from .scanner import ScanConfig, build_graph
 from .history import GitHistory, GitError
 from .source_view import source_page
+from .source_links import SourceLinks
 
 WEB = Path(__file__).with_name("web")
 
@@ -25,6 +26,7 @@ class GraphStore:
         self.sources = {}
         self.graph = build_graph(config, source_contents=self.sources)
         self.histories = {}
+        self.source_links = SourceLinks(config.root)
 
     def get(self, refresh: bool = False) -> dict:
         with self.lock:
@@ -33,6 +35,7 @@ class GraphStore:
                 graph = build_graph(self.config, source_contents=sources)
                 self.graph, self.sources = graph, sources
                 self.histories.clear()
+                self.source_links.clear()
             return self.graph
 
     def source(self, file: str) -> str | None:
@@ -96,6 +99,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(node if node else {"error": "Declaration not found; refresh the graph"}, 200 if node else 404)
             elif url.path == "/api/export":
                 self.json(self.store.get())
+            elif url.path == '/open-source':
+                file = query.get('file', [''])[0]
+                source = self.store.source(file)
+                if source is None:
+                    self.json({'error': 'File is not in the scanned library; refresh the graph'}, 404)
+                    return
+                try:
+                    line = int(query.get('line', ['0'])[0])
+                    end = int(query.get('end', [str(line)])[0])
+                    if not (0 <= line <= end <= max(1, len(source.splitlines()))) or (not line and end):
+                        raise ValueError()
+                except ValueError:
+                    self.json({'error': 'Invalid source line range'}, 400)
+                    return
+                destination = self.store.source_links.destination(file, line, end)
+                self.send_response(302)
+                self.send_header('Location', destination)
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Referrer-Policy', 'no-referrer')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
             elif url.path == '/source':
                 file = query.get('file', [''])[0]
                 source = self.store.source(file)

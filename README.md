@@ -55,12 +55,25 @@ lean-library-graph /path/to/library --open
   numbers. Expanding or collapsing keeps the current node and graph unchanged.
   **Show in Declarations** explicitly selects and reveals the referenced node.
 - **Open Lean file** in the Inspector opens the entire source file in a new
-  browser tab. Module nodes open at the beginning; declaration nodes jump to
-  their starting line, highlighted in yellow. Line numbers are clickable links.
-  The page includes imports, comments, definitions, and complete proofs, with a
-  **Raw source** link. It uses the graph's source snapshot; Refresh sources in
-  the graph and reload the source tab after edits. External import placeholders
-  have no local source button.
+  browser tab. For GitHub, GitLab, Bitbucket Cloud, and Codeberg remotes, it opens
+  the hosted file. Declaration nodes link to their line range; module nodes open
+  the whole file. The current branch's configured remote takes priority, then
+  `origin`, then the first supported remote. It uses the same-named remote branch
+  if present, otherwise `main`, then `master`. A target inside a repository
+  subdirectory uses the full repository-relative file path.
+  Remote branches are checked only when opening a file, using read-only
+  `git ls-remote` with an eight-second timeout and a 60-second cache. No fetch,
+  checkout, or push occurs. Offline, cached Git remote-tracking refs are used.
+  **Refresh sources** clears the branch cache. HTTPS and SSH clone URLs are
+  supported, including hosts named `github.*` and `gitlab.*`; credentials are
+  not included in browser URLs. Other custom hosts, filesystem remotes, missing
+  Git/remotes, or no known matching/main/master branch fall back to the local
+  viewer. Remote content reflects pushed commits, so uncommitted edits and line
+  shifts might differ from the local declaration.
+  The local viewer uses the graph's source snapshot, with a highlighted starting
+  line, clickable line numbers, and a **Raw source** link. Refresh sources and
+  reload the source tab after edits. External import placeholders have no source
+  button.
   Anonymous instances and examples have source-coordinate labels.
 - **File (Module):** a layered graph of explicit imports and inferred declaration use, including files that
   contain no declarations. Arrows point from an importing module to its dependency.
@@ -385,10 +398,17 @@ also contribute dependencies even when omitted from the declaration's source.
 Recognized local bindings shadow outer/global names; simple lambda, quantifier,
 pattern, and layout-delimited proof scopes are tracked conservatively.
 
+For chained calls such as `S.continuous_prim.continuousOn` or
+`S.continuous_prim.tendsto`, the known first member contributes a dependency on
+`IsSetup.continuous_prim`; `S`'s declared type also contributes `IsSetup`.
+The remaining suffix is kept unresolved because its receiver is the first
+member's result, whose type this source-only analysis does not infer.
+
 `source_context.py` separates scope/binding extraction from the global resolver
 in `scanner.py`. Edges retain `kind: inferred-reference` and add an `evidence`
 list with the reference spelling, source line/column, and resolution method.
-Receiver-derived edges additionally report `receiverType`. Unsupported or
+Receiver-derived edges additionally report `receiverType`. Partially resolved
+chains also report `resolvedPrefix` and `unresolvedSuffix`. Unsupported or
 unresolved local field accesses appear in each declaration's
 `unresolvedReferences`, with a total in `analysis.unresolvedFieldReferences`.
 These diagnostics are available in Export JSON. No suffix-only fallback is used.
@@ -396,7 +416,7 @@ The new declaration edges also feed the existing cross-file module-use graph.
 
 This is not Lean elaboration. Complex local scopes and shadowing can still be missed.
 Notation, macros, generated declarations/projections, typeclass resolution,
-implicit arguments, inferred local types, chained field accesses, type unfolding,
+implicit arguments, inferred local types, intermediate types in chained field accesses, type unfolding,
 inherited structure methods, implicit section-instance inclusion, mutual recursion, renamed/restricted
 or command-local `open`, unusual multiline command headers, and module visibility
 rules are not fully modeled. Some legal Lean syntax may be missed. A quoted name
@@ -439,6 +459,7 @@ Local endpoints:
 | `/api/history?window=20` | Per-node and per-module change counts and commit metadata |
 | `/api/node-history?id=...&window=20&commit=SHA` | One node's history and selected declaration diff; commit optional |
 | `/api/export` | Full cached graph including bodies |
+| `/open-source?file=...&line=42&end=50` | Redirect to the remote branch/file/line range, or local viewer; line range optional |
 | `/source?file=...#L42` | Complete scanned source file with a highlighted line anchor |
 | `/source?file=...&raw=1` | Complete scanned source as plain text |
 

@@ -356,3 +356,33 @@ Python 3.9.6 (`/usr/bin/python3`). Postponed annotation evaluation in
 All 37 scanner/history/statement tests and all four HTTP server tests pass on
 Python 3.9.6. Server tests ran separately with temporary loopback access.
 Package metadata, requirements comments, and README now specify Python >= 3.9.
+
+## Remote source links (2026-10-06)
+
+Nine source-link tests pass on Python 3.9.6, using temporary local Git repositories
+and a bare remote to check advertised branches without external network access.
+Coverage includes matching branches with slashes, repository subfolders, unpushed
+branches and stale refs, detached HEAD, main/master fallback, remote selection,
+offline tracking refs, cache invalidation, HTTPS/SSH URLs, credential removal,
+provider-specific line ranges, and local fallback.
+
+All five HTTP tests pass, including remote/local redirects, optional line ranges,
+invalid lines, unknown files, path traversal, and foreign Origin rejection.
+JavaScript syntax and `git diff --check` pass.
+
+After restarting the localhost app with `../pde_ai`, its live `/open-source`
+endpoint returns HTTP 302 to the GitHub main-branch CaratheodoryExistence.lean
+file with the declaration range `#L1048-L1082`.
+
+## Chained receiver references (2026-10-06)
+
+All 30 scanner tests pass on Python 3.9.6. New regressions cover a known first
+member in a chain, its receiver-type dependency, distinct suffix evidence on one
+deduplicated edge, unresolved intermediate types, unknown local shadowing,
+ambiguous receiver types, and import/source-order visibility.
+
+A source-only scan of the real CaratheodoryExistence.lean confirms that
+`CaratheodoryFull.IsSetup.exists_solution` depends on both `IsSetup` and
+`IsSetup.continuous_prim`. Evidence retains `S.continuous_prim.continuousOn` at
+line 723, column 55, and `S.continuous_prim.tendsto` at line 802, column 31.
+The first member is resolved; each remaining suffix is explicitly unresolved.

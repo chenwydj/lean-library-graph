@@ -384,19 +384,29 @@ def build_graph(config: ScanConfig, *, source_contents: dict[str, str] | None = 
                 binding = occurrence['receiver']
                 receiver_type = (resolve(binding.head, d, binding.namespace, binding.opens, binding.line)
                                  if binding and binding.head else None)
-                member = ref.partition('.')[2]
-                if receiver_type and re.fullmatch(CONTEXT_IDENT, member):
+                root, _, access = ref.partition('.')
+                # Later fields operate on the first member's result. Retain
+                # that known dependency without guessing the result's type or
+                # treating the whole chain as a name under the receiver type.
+                parts = re.fullmatch(rf'({CONTEXT_IDENT})(?:\.(.*))?', access)
+                member, suffix = parts.groups() if parts else ('', None)
+                if receiver_type and member:
                     target = resolve('_root_.' + receiver_type['fullName'] + '.' + member,
                                      d, '', (), d['line'])
                     evidence.update(resolution='receiver-type', receiverType=receiver_type['fullName'])
                 if not target:
-                    reason = ('Chained field access needs intermediate type inference'
-                              if not re.fullmatch(CONTEXT_IDENT, member)
-                              else 'No unique visible member for the explicit receiver type' if receiver_type
+                    reason = ('No unique visible member for the explicit receiver type' if receiver_type
                               else 'Receiver type is unknown, unsupported, or not uniquely resolved')
                     unresolved.append(dict(reference=ref, line=occurrence['line'],
                                            column=occurrence['column'], reason=reason))
                     continue
+                if suffix:
+                    prefix = root + '.' + member
+                    evidence.update(resolvedPrefix=prefix, unresolvedSuffix=suffix)
+                    unresolved.append(dict(reference=ref, line=occurrence['line'],
+                                           column=occurrence['column'], resolvedPrefix=prefix,
+                                           unresolvedSuffix=suffix,
+                                           reason='First member resolved; remaining chain needs intermediate type inference'))
             else:
                 context = occurrence.get('context')
                 target = resolve(ref, d, context.namespace if context else ns,
