@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lean-library-graph"
 version = "0.2.0"
 description = "Local Lean library graphs based on Archon's Proof Graph"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = {text = "Apache-2.0"}
 dependencies = []
 

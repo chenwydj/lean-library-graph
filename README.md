@@ -3,7 +3,7 @@
 A standalone localhost explorer for Lean source libraries, based on
 [Archon's Proof Graph](https://github.com/frenzymath/Archon).
 It reuses Archon's file-group layout and source-scanning approach, with a new
-Python server and framework-free SVG interface. Python 3.10 or newer is the
+Python server and framework-free SVG interface. Python 3.9 or newer is the
 only runtime dependency. No Lean build, Node, network access, or Archon metadata
 is needed to use the tool. Git is optional and enables activity coloring and diffs.
 

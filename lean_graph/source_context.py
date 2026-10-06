@@ -5,6 +5,8 @@ have/let/set bindings. Unknown bindings still shadow global names. No theorem
 suffix lookup or inference from tactic results is performed.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import re
 

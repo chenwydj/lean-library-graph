@@ -347,3 +347,12 @@ pass. API tests used a temporary loopback server.
 Browser verification against the restarted localhost server confirms all five
 dependencies in the Inspector and all six nodes after expanding children.
 No browser console errors were recorded.
+
+## Python 3.9 compatibility (2026-10-06)
+
+Reproduced the startup TypeError from `Binding.head: str | None` using macOS
+Python 3.9.6 (`/usr/bin/python3`). Postponed annotation evaluation in
+`source_context.py` fixes the import. The CLI `--help` now exits successfully.
+All 37 scanner/history/statement tests and all four HTTP server tests pass on
+Python 3.9.6. Server tests ran separately with temporary loopback access.
+Package metadata, requirements comments, and README now specify Python >= 3.9.
