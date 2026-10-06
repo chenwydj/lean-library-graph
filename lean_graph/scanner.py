@@ -15,6 +15,7 @@ import os
 import re
 
 from .statements import extract_statement, before_tactic_proof
+from .source_context import IDENT as CONTEXT_IDENT, read_variables, source_references
 
 
 IDENT = r"(?:«[^»\n]+»|[^\W\d][\w'!?]*)"
@@ -122,10 +123,14 @@ def parse_source(text: str, file: str, module: str) -> tuple[list[dict], list[st
     original_code = masked.splitlines()
     declarations: list[dict] = []
     imports: list[str] = []
-    # Each scope saves the namespace and opened namespace state it will restore.
-    scopes: list[tuple[str, list[str]]] = []
+    # Section variables and include/omit state obey namespace/section lifetimes.
+    scopes = []
     namespace = ""
     opened: list[str] = []
+    variables = {}
+    included: set[str] = set()
+    variable_command = None
+    command_inclusion = None
     active: dict | None = None
 
     def finish(end: int) -> None:
@@ -144,10 +149,12 @@ def parse_source(text: str, file: str, module: str) -> tuple[list[dict], list[st
                       sorryCount=sum(t in {"sorry", "admit"} for t in tokens))
         active["hasSorry"] = active["sorryCount"] > 0
         # Exclude the header name itself, but retain references in its type.
-        header_match = DECL.match(code[start].strip())
-        ref_code = "\n".join(code[start:end]).lstrip()
-        ref_code = ref_code[header_match.end():] if header_match else ref_code
-        active["_refs"] = sorted(set(TOKEN.findall(ref_code)) - KEYWORDS)
+        ref_code = "\n".join(code[start:end])
+        header_end = active.pop('_headerEnd')
+        active["_refs"] = source_references(ref_code, header_end,
+            variables=active.pop("_variables"), included=active.pop("_included"),
+            namespace=active["namespace"], opens=active["_opens"], first_line=start + 1,
+            theorem=active["kind"] in {"theorem", "lemma", "example"})
         statement = extract_statement(body, strip_attributes(shadow), active["kind"])
         active["statement"] = statement
         active["previewStatement"] = before_tactic_proof(body, strip_attributes(shadow))
@@ -158,14 +165,29 @@ def parse_source(text: str, file: str, module: str) -> tuple[list[dict], list[st
     for i, line in enumerate(code):
         stripped = line.strip()
         if not stripped:
+            if variable_command is not None:
+                variable_command[1].append(line)
             continue
         # Attribute masking must not increase the declaration's indentation.
         indent = len(lines[i]) - len(lines[i].lstrip())
-        dm, sm, im = DECL.match(stripped), SCOPE.match(stripped), IMPORT.match(stripped)
+        declaration_code = stripped
+        inline_inclusion = re.match(r'(include|omit)\s+(.+?)\s+in\s+', stripped)
+        if inline_inclusion and DECL.match(stripped[inline_inclusion.end():]):
+            declaration_code = stripped[inline_inclusion.end():]
+        else:
+            inline_inclusion = None
+        dm, sm, im = DECL.match(declaration_code), SCOPE.match(stripped), IMPORT.match(stripped)
         outside = OUTSIDE.match(stripped)
         boundary = dm or sm or im or outside
         if active and boundary and indent > active["_indent"]:
             continue
+        if variable_command is not None:
+            if not boundary:
+                variable_command[1].append(line)
+                continue
+            variables = read_variables("\n".join(variable_command[1]), variables,
+                                       namespace, opened, variable_command[0] + 1)
+            variable_command = None
         if boundary:
             finish(i)
         if im:
@@ -174,11 +196,27 @@ def parse_source(text: str, file: str, module: str) -> tuple[list[dict], list[st
             kind, name = sm.groups()
             if kind == "end":
                 if scopes:
-                    namespace, opened = scopes.pop()
+                    namespace, opened, variables, included = scopes.pop()
             else:
-                scopes.append((namespace, opened.copy()))
+                scopes.append((namespace, opened.copy(), variables.copy(), included.copy()))
                 if kind == "namespace" and name:
                     namespace = qualify(namespace, name)
+        elif re.match(r"variables?\b", stripped):
+            variable_command = [i, [line]]
+        elif not dm and (inclusion := re.match(r"(include|omit)\s+(.+)$", stripped)):
+            names = TOKEN.findall(inclusion[2])
+            local_command = bool(names and names[-1] == 'in')
+            if local_command:
+                names.pop()
+            target = included.copy()
+            if inclusion[1] == 'include':
+                target.update(names)
+            else:
+                target.difference_update(names)
+            if local_command:
+                command_inclusion = target
+            else:
+                included = target
         elif re.match(r"open\s+", stripped):
             rest = stripped[5:].strip()
             # Restricted/renamed and command-local opens need elaboration.
@@ -193,13 +231,24 @@ def parse_source(text: str, file: str, module: str) -> tuple[list[dict], list[st
             else:
                 anonymous = False
             full_name = qualify(namespace, name)
+            declaration_included = (included if command_inclusion is None else command_inclusion).copy()
+            if inline_inclusion:
+                names = TOKEN.findall(inline_inclusion[2])
+                if inline_inclusion[1] == 'include':
+                    declaration_included.update(names)
+                else:
+                    declaration_included.difference_update(names)
             # Source coordinates distinguish private names and duplicate examples.
             active = dict(id=f"{file}:{i + 1}:{full_name}", name=name,
                           fullName=full_name, kind=kind, file=file, module=module,
                           line=i + 1, namespace=namespace, anonymous=anonymous,
-                          private=bool(re.search(r"\bprivate\b", stripped[:dm.start(1)])),
-                          protected=bool(re.search(r"\bprotected\b", stripped[:dm.start(1)])),
-                          _opens=opened.copy(), _start=i, _indent=indent)
+                          private=bool(re.search(r"\bprivate\b", declaration_code[:dm.start(1)])),
+                          protected=bool(re.search(r"\bprotected\b", declaration_code[:dm.start(1)])),
+                          _opens=opened.copy(), _variables=variables.copy(),
+                          _included=declaration_included,
+                          _headerEnd=len(line)-len(line.lstrip())+len(stripped)-len(declaration_code)+dm.end(),
+                          _start=i, _indent=indent)
+            command_inclusion = None
     finish(len(lines))
     return declarations, list(dict.fromkeys(imports))
 
@@ -291,36 +340,81 @@ def build_graph(config: ScanConfig, *, source_contents: dict[str, str] | None = 
 
     edges: list[dict] = []
     ambiguous = 0
+    unresolved_fields = 0
+
+    def resolve(ref, declaration, namespace, opens, before_line):
+        """Resolve a global name in its original lexical/import context."""
+        nonlocal ambiguous
+        prefixes = [".".join(namespace.split(".")[:n])
+                    for n in range(len(namespace.split(".")), 0, -1)] if namespace else []
+        if ref.startswith('_root_.'):
+            tiers = [([ref[7:]], True)]
+        else:
+            tiers = [([qualify(prefix, ref)], True) for prefix in prefixes]
+            tiers += [([ref], True), ([qualify(op, ref) for op in opens], False)]
+        for names, protected_allowed in tiers:
+            matches = {}
+            for name in names:
+                for target in by_name.get(name, []):
+                    visible = target['module'] in closure[declaration['module']]
+                    visible &= not target['private'] or target['file'] == declaration['file']
+                    visible &= target['file'] != declaration['file'] or target['line'] < before_line
+                    visible &= protected_allowed or not target['protected']
+                    if visible:
+                        matches[target['id']] = target
+            if len(matches) > 1:
+                ambiguous += 1
+                return None
+            if matches:
+                return next(iter(matches.values()))
+        return None
+
     for d in declarations:
-        seen_targets: set[str] = set()
+        target_edges = {}
+        unresolved = []
         ns = d["fullName"].rsplit(".", 1)[0] if "." in d["fullName"] else ""
-        namespace_prefixes = [".".join(ns.split(".")[:n]) for n in range(len(ns.split(".")), 0, -1)] if ns else []
-        for ref in d.pop("_refs"):
-            if ref.startswith("_root_."):
-                tiers = [[ref[7:]]]
+        for occurrence in d.pop('_refs'):
+            ref = occurrence['name']
+            if ref in KEYWORDS:
+                continue
+            evidence = {k: occurrence[k] for k in ('line', 'column')}
+            evidence.update(reference=ref, resolution='lexical')
+            target = None
+            if occurrence['local']:
+                binding = occurrence['receiver']
+                receiver_type = (resolve(binding.head, d, binding.namespace, binding.opens, binding.line)
+                                 if binding and binding.head else None)
+                member = ref.partition('.')[2]
+                if receiver_type and re.fullmatch(CONTEXT_IDENT, member):
+                    target = resolve('_root_.' + receiver_type['fullName'] + '.' + member,
+                                     d, '', (), d['line'])
+                    evidence.update(resolution='receiver-type', receiverType=receiver_type['fullName'])
+                if not target:
+                    reason = ('Chained field access needs intermediate type inference'
+                              if not re.fullmatch(CONTEXT_IDENT, member)
+                              else 'No unique visible member for the explicit receiver type' if receiver_type
+                              else 'Receiver type is unknown, unsupported, or not uniquely resolved')
+                    unresolved.append(dict(reference=ref, line=occurrence['line'],
+                                           column=occurrence['column'], reason=reason))
+                    continue
             else:
-                tiers = [[qualify(prefix, ref)] for prefix in namespace_prefixes]
-                tiers += [[ref], [qualify(op, ref) for op in d["_opens"]]]
-            for index, tier in enumerate(tiers):
-                matches: dict[str, dict] = {}
-                for name in tier:
-                    for target in by_name.get(name, []):
-                        visible = target["module"] in closure[d["module"]]
-                        visible &= not target["private"] or target["file"] == d["file"]
-                        visible &= target["file"] != d["file"] or target["line"] < d["line"]
-                        if index == len(tiers) - 1 and not ref.startswith("_root_.") and target["protected"]:
-                            visible = False
-                        if visible:
-                            matches[target["id"]] = target
-                if len(matches) > 1:
-                    ambiguous += 1
-                    break
-                if len(matches) == 1:
-                    target_id = next(iter(matches))
-                    if target_id not in seen_targets:
-                        seen_targets.add(target_id)
-                        edges.append({"from": d["id"], "to": target_id, "kind": "inferred-reference"})
-                    break
+                context = occurrence.get('context')
+                target = resolve(ref, d, context.namespace if context else ns,
+                                 context.opens if context else d['_opens'],
+                                 context.line if context else d['line'])
+                if context:
+                    evidence.update(resolution='section-variable-type', sectionVariable=occurrence['sectionVariable'])
+            if target:
+                edge = target_edges.get(target['id'])
+                if edge is None:
+                    edge = {'from': d['id'], 'to': target['id'], 'kind': 'inferred-reference', 'evidence': []}
+                    target_edges[target['id']] = edge
+                    edges.append(edge)
+                if evidence not in edge['evidence']:
+                    edge['evidence'].append(evidence)
+        if unresolved:
+            d['unresolvedReferences'] = unresolved
+            unresolved_fields += len(unresolved)
         d.pop("_opens")
 
     return dict(schemaVersion=1, project=dict(name=config.root.name, root=str(config.root),
@@ -328,6 +422,7 @@ def build_graph(config: ScanConfig, *, source_contents: dict[str, str] | None = 
                 generatedAt=datetime.now(timezone.utc).isoformat(),
                 analysis=dict(mode="source", declarationEdges="inferred", moduleEdges="explicit imports",
                               ambiguousReferencesSkipped=ambiguous,
+                              unresolvedFieldReferences=unresolved_fields,
                               note="Source analysis only. References are inferred, and no-sorry does not mean Lean-verified."),
                 stats=dict(files=len(files), declarations=len(declarations), edges=len(edges),
                            imports=len(module_edges), externalModules=len(external),

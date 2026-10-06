@@ -457,7 +457,7 @@ function draw() {
         : `${d.kind}${heat?' · '+(changes?changes.changeCount:'?')+' changes':''}${d.hasSorry?' · sorry':''}`,Math.max(2,Math.floor((n.w-24)/(6.2*fontScale))))),
       S('title',{},`${d.fullName}\n${d.file||'External import'}${d.line?':'+d.line:''}${heat?'\nChanged commits: '+(changes?changes.changeCount:'unmatched'):''}`));
     if (isTree()) {
-      if(n.treeSeed || n.treeRoot)el.append(S('text',{class:'tree-root-label',x:n.x+4,y:n.y-10},n.cycleRoot?'CYCLE ENTRY':n.treeSeed?'START':'ROOT'));
+      if(n.cycleRoot || (n.treeRoot && !n.treeSeed))el.append(S('text',{class:'tree-root-label',x:n.x+4,y:n.y-10},n.cycleRoot?'CYCLE ENTRY':'ROOT'));
       for(const [direction,index,label,x] of [
         ['parents',state.treeModel.incoming,'Parents',n.x+10],
         ['children',state.treeModel.out,'Children',n.x+n.w/2+4],

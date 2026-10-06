@@ -325,3 +325,25 @@ Browser regression check against the local pde_ai source graph:
    trip. The single-node folded graph and its viewport are restored exactly.
 
 No browser console errors. All 47 JavaScript tests pass; app.js syntax check passes.
+
+## Receiver-aware source dependencies (2026-10-06)
+
+The full source-only pde_ai scan covers 2,408 files and 27,329 declarations.
+It finds 1,917 declaration edges with explicit receiver-type evidence. In
+CaratheodoryExistence.lean, `CaratheodoryFull.caratheodory_existence` now links to
+`IsSetup.exists_solution`, `IsSetup.ae_hasDerivAt`, and `IsSetup.t0_mem` under the
+`CaratheodoryFull` namespace, in addition to `IsSetup` and `exists_shrink`.
+The `S.ae_hasDerivAt` evidence points to line 1080, column 5, with receiver type
+`CaratheodoryFull.IsSetup`. No Lean build or elaboration is used.
+
+Scanner regressions cover typed parameters and local have/let/set bindings,
+multiline variables/types, include/omit and command-local inclusion, nested
+sections, type resolution at the binding's declaration, shadowing and initializer
+scope, lambda/pattern scopes, unknown local types, same-suffix methods on different
+types, import visibility, private/later declarations, and umbrella imports.
+All 27 scanner tests and the 14 other Python tests pass. All 47 JavaScript tests
+pass. API tests used a temporary loopback server.
+
+Browser verification against the restarted localhost server confirms all five
+dependencies in the Inspector and all six nodes after expanding children.
+No browser console errors were recorded.

@@ -124,6 +124,272 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph['stats']['files'], 0)
         json.dumps(graph)
 
+    def setup_types(self):
+        self.write('Types.lean', '''namespace A
+structure Setup where
+  n : Nat
+theorem Setup.finish (s : Setup) : True := by trivial
+end A
+namespace B
+structure Setup where
+  n : Nat
+theorem Setup.finish (s : Setup) : True := by trivial
+end B
+''')
+
+    def test_typed_receiver_selects_its_type_not_same_suffix(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem useA (S : A.Setup) : True := by
+  exact S.finish
+theorem useB (S : B.Setup) : True := by
+  exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        self.assertIn(('useA', 'A.Setup.finish'), edges)
+        self.assertIn(('useB', 'B.Setup.finish'), edges)
+        self.assertNotIn(('useA', 'B.Setup.finish'), edges)
+        evidence = [v for e in graph['edges'] for v in e['evidence'] if v['reference'] == 'S.finish']
+        self.assertEqual({e['receiverType'] for e in evidence}, {'A.Setup', 'B.Setup'})
+        self.assertTrue(all(e['resolution'] == 'receiver-type' for e in evidence))
+        self.assertEqual({e['line'] for e in evidence}, {3, 5})
+        json.dumps(graph)
+
+    def test_local_have_let_and_multiline_types(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem example : True := by
+  have S :
+      A.Setup :=
+    { n := 0 }
+  have first := S.finish
+  let T : B.Setup := { n := 0 }
+  exact T.finish
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('example', 'A.Setup.finish'), edges)
+        self.assertIn(('example', 'B.Setup.finish'), edges)
+
+    def test_nested_shadowing_ends_at_dedent_and_initializer_uses_outer_binding(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem example (S : A.Setup) : True := by
+  have inner : True := by
+    have S : B.Setup := by
+      have previous := S.finish
+      exact { n := 0 }
+    exact S.finish
+  exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        evidence = [v for e in graph['edges'] for v in e['evidence'] if v['reference'] == 'S.finish']
+        # Each (reference, receiver context) is retained at its first occurrence.
+        self.assertEqual({(e['line'], e['receiverType']) for e in evidence},
+                         {(5, 'A.Setup'), (7, 'B.Setup')})
+        self.write('Use.lean', '''import Types
+theorem example (S : A.Setup) : True := by
+  have inner : True := by
+    have S : B.Setup := { n := 0 }
+    trivial
+  exact S.finish
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('example', 'A.Setup.finish'), edges)
+        self.assertNotIn(('example', 'B.Setup.finish'), edges)
+
+    def test_unknown_local_does_not_inherit_outer_receiver_type(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem example (S : A.Setup) : True := by
+  let S := arbitrary
+  exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        self.assertNotIn(('example', 'A.Setup.finish'), edges)
+        self.assertEqual(graph['analysis']['unresolvedFieldReferences'], 1)
+        node = next(d for d in graph['declarations'] if d['name'] == 'example')
+        self.assertEqual(node['unresolvedReferences'][0]['reference'], 'S.finish')
+
+    def test_section_variables_include_omit_and_nested_scope_restore(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+namespace A
+variable
+  (S : Setup)
+include S
+section Inner
+variable (S : B.Setup)
+theorem inner : True := by exact S.finish
+end Inner
+theorem outer : True := by exact S.finish
+omit S
+theorem unused : True := by trivial
+include S
+theorem included : True := by trivial
+end A
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('A.inner', 'B.Setup.finish'), edges)
+        self.assertIn(('A.outer', 'A.Setup.finish'), edges)
+        self.assertIn(('A.included', 'A.Setup'), edges)
+        self.assertFalse(any(a == 'A.unused' for a, _ in edges))
+
+    def test_section_variable_in_header_and_declared_type_context(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+open A
+variable (S : Setup)
+namespace B
+theorem use : S = S := by
+  have h := S.finish
+  rfl
+end B
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('B.use', 'A.Setup.finish'), edges)
+        self.assertNotIn(('B.use', 'B.Setup.finish'), edges)
+
+    def test_explicit_parameter_shadows_section_variable_without_spurious_type_edge(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+variable (S : A.Setup)
+theorem example (S : B.Setup) : True := by exact S.finish
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('example', 'B.Setup.finish'), edges)
+        self.assertNotIn(('example', 'A.Setup.finish'), edges)
+        self.assertNotIn(('example', 'A.Setup'), edges)
+
+    def test_lambda_shadowing_is_limited_to_expression(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem example (S : A.Setup) : True := by
+  have f := (fun (S : B.Setup) => S.finish)
+  exact S.finish
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('example', 'A.Setup.finish'), edges)
+        self.assertIn(('example', 'B.Setup.finish'), edges)
+
+    def test_local_type_parameter_does_not_resolve_to_global_type(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+open A
+theorem example (Setup : Type) (S : Setup) : True := by exact S.finish
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertNotIn(('example', 'A.Setup.finish'), edges)
+        self.assertNotIn(('example', 'A.Setup'), edges)
+
+    def test_receiver_resolution_obeys_import_visibility_and_ambiguity(self):
+        self.setup_types()
+        self.write('Hidden.lean', 'theorem A.Setup.hidden (s : A.Setup) : True := by trivial\n')
+        self.write('Use.lean', '''import Types
+open A B
+theorem ambiguous (S : Setup) : True := by exact S.finish
+theorem unavailable (S : A.Setup) : True := by exact S.hidden
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertFalse(any(a == 'ambiguous' for a, _ in edges))
+        self.assertNotIn(('unavailable', 'A.Setup.hidden'), edges)
+
+    def test_caratheodory_pattern_recovers_all_three_receiver_dependencies(self):
+        self.write('Example.lean', '''namespace CaratheodoryFull
+structure IsSetup where
+  h_pos : True
+namespace IsSetup
+section Basic
+variable (S : IsSetup)
+include S
+theorem t0_mem : True := by trivial
+theorem exists_solution : True := by exact S.t0_mem
+end Basic
+end IsSetup
+theorem IsSetup.ae_hasDerivAt (S : IsSetup) : True := by exact S.t0_mem
+theorem caratheodory_existence : True := by
+  have S : IsSetup := { h_pos := True.intro }
+  have h := S.exists_solution
+  have h' := S.ae_hasDerivAt
+  exact S.t0_mem
+end CaratheodoryFull
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        for method in ('t0_mem', 'exists_solution', 'ae_hasDerivAt'):
+            self.assertIn(('CaratheodoryFull.caratheodory_existence', 'CaratheodoryFull.IsSetup.' + method), edges)
+
+    def test_include_in_and_omit_in_do_not_leak(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+variable (S : A.Setup)
+include S in theorem one : True := by exact S.finish
+theorem two : True := by trivial
+include S in
+theorem three : True := by exact S.finish
+theorem four : True := by trivial
+include S
+omit S in theorem five : True := by trivial
+theorem six : True := by exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        edges = self.named_edges(graph)
+        for name in ('one', 'three', 'six'):
+            self.assertIn((name, 'A.Setup.finish'), edges)
+        for name in ('two', 'four', 'five'):
+            self.assertFalse(any(a == name for a, _ in edges))
+
+    def test_branch_pattern_shadows_outer_receiver(self):
+        self.setup_types()
+        self.write('Use.lean', '''import Types
+theorem example (S : A.Setup) : True := by
+  have h := match arbitrary with
+    | some S => S.finish
+    | none => True.intro
+  exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        method_edges = [e for e in graph['edges'] if e['to'].endswith(':A.Setup.finish')]
+        self.assertEqual(len(method_edges), 1)
+        self.assertEqual(method_edges[0]['evidence'][0]['line'], 6)
+        self.assertEqual(graph['analysis']['unresolvedFieldReferences'], 1)
+
+    def test_private_and_later_methods_are_not_linked_from_receiver(self):
+        self.write('Base.lean', '''structure Setup where
+  n : Nat
+private theorem Setup.secret (S : Setup) : True := by trivial
+''')
+        self.write('Use.lean', '''import Base
+theorem example (S : Setup) : True := by
+  have h := S.secret
+  exact S.later
+theorem Setup.later (S : Setup) : True := by trivial
+''')
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertNotIn(('example', 'Setup.secret'), edges)
+        self.assertNotIn(('example', 'Setup.later'), edges)
+
+    def test_cross_file_receiver_edge_survives_umbrella_import(self):
+        self.setup_types()
+        self.write('Umbrella.lean', 'import Types\n')
+        self.write('Use.lean', '''import Umbrella
+theorem use (S : A.Setup) : True := by exact S.finish
+''')
+        graph = build_graph(ScanConfig(self.root))
+        self.assertIn(('use', 'A.Setup.finish'), self.named_edges(graph))
+        self.assertIn({'from': 'Use', 'to': 'Umbrella'}, graph['moduleEdges'])
+
+    def test_set_binding_and_trailing_header_whitespace(self):
+        self.setup_types()
+        code = ('import Types\ntheorem use (S : A.Setup) : True := by' + '   \n'
+                '  have h := S.finish\n'
+                '  set T : B.Setup := { n := 0 } with hT\n'
+                '  exact T.finish\n')
+        self.write('Use.lean', code)
+        edges = self.named_edges(build_graph(ScanConfig(self.root)))
+        self.assertIn(('use', 'A.Setup.finish'), edges)
+        self.assertIn(('use', 'B.Setup.finish'), edges)
+
 
 if __name__ == '__main__':
     unittest.main()

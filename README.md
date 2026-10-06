@@ -375,9 +375,29 @@ source order within a file. It keeps duplicate declarations distinct, excludes
 other files' private declarations, and skips ambiguous candidate references.
 References in both types and bodies can produce edges.
 
-This is not Lean elaboration. Local variable shadowing can produce false edges.
+The scanner also tracks explicitly typed declaration parameters, section
+`variable` commands, `include`/`omit` (including `in` before a theorem), and typed
+local `have`, `let`, and `set` bindings. Namespace/section endings restore their
+previous variable context. A use such as `S.ae_hasDerivAt` can therefore resolve
+through `S : IsSetup ...` to `IsSetup.ae_hasDerivAt`. Type names are resolved in
+the context where the binding was declared. Used/included section-variable types
+also contribute dependencies even when omitted from the declaration's source.
+Recognized local bindings shadow outer/global names; simple lambda, quantifier,
+pattern, and layout-delimited proof scopes are tracked conservatively.
+
+`source_context.py` separates scope/binding extraction from the global resolver
+in `scanner.py`. Edges retain `kind: inferred-reference` and add an `evidence`
+list with the reference spelling, source line/column, and resolution method.
+Receiver-derived edges additionally report `receiverType`. Unsupported or
+unresolved local field accesses appear in each declaration's
+`unresolvedReferences`, with a total in `analysis.unresolvedFieldReferences`.
+These diagnostics are available in Export JSON. No suffix-only fallback is used.
+The new declaration edges also feed the existing cross-file module-use graph.
+
+This is not Lean elaboration. Complex local scopes and shadowing can still be missed.
 Notation, macros, generated declarations/projections, typeclass resolution,
-implicit arguments, section-variable types, mutual recursion, renamed/restricted
+implicit arguments, inferred local types, chained field accesses, type unfolding,
+inherited structure methods, implicit section-instance inclusion, mutual recursion, renamed/restricted
 or command-local `open`, unusual multiline command headers, and module visibility
 rules are not fully modeled. Some legal Lean syntax may be missed. A quoted name
 whose literal text contains a dot is not fully resolved semantically. `sorryAx`
